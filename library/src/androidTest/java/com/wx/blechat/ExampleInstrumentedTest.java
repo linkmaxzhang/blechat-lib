@@ -21,6 +21,6 @@ public class ExampleInstrumentedTest {
         // Context of the app under test.
         Context appContext = InstrumentationRegistry.getTargetContext();
 
-        assertEquals("com.wx.blechat", appContext.getPackageName());
+        assertEquals("com.wx.blechat.test", appContext.getPackageName());
     }
 }
