@@ -1,5 +1,6 @@
 package com.wx.blechat;
 
+import android.annotation.TargetApi;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothGatt;
@@ -19,6 +20,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.ParcelUuid;
 import android.util.Log;
@@ -37,13 +39,12 @@ import java.util.UUID;
  * This class will manage the Bluetooth LE Central stuff
  * A Central BLE device is a device which can connect to another Peripheral device that is
  * advertising services. So it's basically a client.
- *
+ * <p>
  * It communicates with the outer space via events like:
  * * BLEDiscoverCallback
  * * BLECentralChatEvents
- *
+ * <p>
  * Use init() no initialize the class
- *
  */
 public class BLECentralHelper {
 
@@ -66,19 +67,23 @@ public class BLECentralHelper {
     /* Test RFCOMMSocket connection */
     private BluetoothSocket mSocket;
     private String mRfcommSocketAddress;
-    private BLEDiscoverCallback mBleDiscoveryCallback;
-    private BLECentralChatEvents mBleChatEvents;
+
+    private List<BLEDiscoverCallback> mBleDiscoveryCallback = new ArrayList<>();
+    private List<BLECentralChatEvents> mBleChatEvents = new ArrayList<>();
 
     private Handler mHandler = new Handler();
 
     private Context mContext;
 
     private static BLECentralHelper instance = new BLECentralHelper();
-    private BLECentralHelper(){}
-    public static BLECentralHelper getInstance(){
-        if(instance == null){
-            synchronized (BLECentralHelper.class){
-                if(instance == null){
+
+    private BLECentralHelper() {
+    }
+
+    public static BLECentralHelper getInstance() {
+        if (instance == null) {
+            synchronized (BLECentralHelper.class) {
+                if (instance == null) {
                     instance = new BLECentralHelper();
                 }
             }
@@ -86,27 +91,141 @@ public class BLECentralHelper {
         return instance;
     }
 
-    public void init(Context context, BLEDiscoverCallback bleCallback){
+    public void register(BLEDiscoverCallback bleCallback) {
+        mBleDiscoveryCallback.add(bleCallback);
+    }
+
+    public void unregister(BLEDiscoverCallback bleCallback) {
+        mBleDiscoveryCallback.remove(bleCallback);
+    }
+
+    /**
+     * Events for the advertising phase
+     */
+    private enum NotifyDisAction {
+        NOTIFY_DIS_ACTION_INIT_FAILURE,
+        NOTIFY_DIS_ACTION_INIT_SUCCESS,
+        NOTIFY_DIS_ACTION_SCAN_RESULT,
+        NOTIFY_DIS_ACTION_SCAN_FAILED,
+    }
+
+    private void notifyDisListeners(NotifyDisAction action, Object data) {
+        notifyDisListeners(action, data, null);
+    }
+
+    private void notifyDisListeners(NotifyDisAction action, Object data, Object extra) {
+        for (BLEDiscoverCallback callback : mBleDiscoveryCallback) {
+            switch (action) {
+                case NOTIFY_DIS_ACTION_INIT_FAILURE:
+                    callback.onInitFailure((String) data);
+                    break;
+                case NOTIFY_DIS_ACTION_INIT_SUCCESS:
+                    callback.onInitSuccess();
+                    break;
+                case NOTIFY_DIS_ACTION_SCAN_RESULT:
+                    callback.onScanResult((BluetoothDevice) data, (Integer) extra);
+                    break;
+                case NOTIFY_DIS_ACTION_SCAN_FAILED:
+                    callback.onScanFailed((String) data);
+            }
+        }
+    }
+
+    public void register(BLECentralChatEvents bleChatEvents) {
+        mBleChatEvents.add(bleChatEvents);
+    }
+
+    public void unregister(BLECentralChatEvents bleChatEvents) {
+        mBleChatEvents.remove(bleChatEvents);
+    }
+
+    /**
+     * Events for the chatting phase
+     */
+    private enum NotifyChatAction {
+        NOTIFY_CHAT_ACTION_CONNECT,
+        NOTIFY_CHAT_ACTION_DISCONNECT,
+        NOTIFY_CHAT_ACTION_VERSION,
+        NOTIFY_CHAT_ACTION_DESCRIPTION,
+        NOTIFY_CHAT_ACTION_RFCOMM_CONNECT,
+        NOTIFY_CHAT_ACTION_MTU_CHANGED,
+        NOTIFY_CHAT_ACTION_MESSAGE,
+        NOTIFY_CHAT_ACTION_DATA,
+        NOTIFY_CHAT_ACTION_DATA_STREAM,
+        NOTIFY_CHAT_ACTION_STREAM_SENT,
+        NOTIFY_CHAT_ACTION_INFO,
+        NOTIFY_CHAT_ACTION_CONNECTION_ERROR,
+    }
+
+    private void notifyChatListeners(NotifyChatAction action, Object data) {
+        notifyChatListeners(action, data, null);
+    }
+
+    private void notifyChatListeners(NotifyChatAction action, Object data, Object extra) {
+        for (BLECentralChatEvents callback : mBleChatEvents) {
+            switch (action) {
+                case NOTIFY_CHAT_ACTION_CONNECT:
+                    callback.onConnect();
+                    break;
+                case NOTIFY_CHAT_ACTION_DISCONNECT:
+                    callback.onDisconnect();
+                    break;
+                case NOTIFY_CHAT_ACTION_VERSION:
+                    callback.onVersion((String) data);
+                    break;
+                case NOTIFY_CHAT_ACTION_DESCRIPTION:
+                    callback.onDescription((String) data);
+                    break;
+                case NOTIFY_CHAT_ACTION_RFCOMM_CONNECT:
+                    callback.onRfcommConnect();
+                    break;
+                case NOTIFY_CHAT_ACTION_MTU_CHANGED:
+                    callback.onMtuChanged((Integer) data, (Integer) extra);
+                    break;
+                case NOTIFY_CHAT_ACTION_MESSAGE:
+                    callback.onMessage((String) data);
+                    break;
+                case NOTIFY_CHAT_ACTION_DATA:
+                    callback.onData((byte[]) data);
+                    break;
+                case NOTIFY_CHAT_ACTION_DATA_STREAM:
+                    callback.onDataStream((byte[]) data);
+                    break;
+                case NOTIFY_CHAT_ACTION_STREAM_SENT:
+                    callback.onStreamSent((Integer) data);
+                    break;
+                case NOTIFY_CHAT_ACTION_INFO:
+                    callback.onInfo((String) data);
+                    break;
+                case NOTIFY_CHAT_ACTION_CONNECTION_ERROR:
+                    callback.onConnectionError((String) data);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    public void init(Context context) {
         mContext = context;
-        mBleDiscoveryCallback = bleCallback;
-        if( context == null){
-            mBleDiscoveryCallback.onInitFailure("Invalid Context!");
+        if (context == null) {
+            notifyDisListeners(NotifyDisAction.NOTIFY_DIS_ACTION_INIT_FAILURE, "Invalid Context!");
             return;
         }
         mBluetoothManager = (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
         mBluetoothAdapter = mBluetoothManager.getAdapter();
-        if (mBluetoothAdapter == null || !mBluetoothAdapter.isEnabled()){
-            mBleDiscoveryCallback.onInitFailure("Bluetooth not supported in this device!!");
+        if (mBluetoothAdapter == null || !mBluetoothAdapter.isEnabled()) {
+            notifyDisListeners(NotifyDisAction.NOTIFY_DIS_ACTION_INIT_FAILURE, "Bluetooth not supported in this device!!");
+
             return;
         }
 
         if (!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
-            mBleDiscoveryCallback.onInitFailure("Bluetooth LE is not supported in this devices!!");
+            notifyDisListeners(NotifyDisAction.NOTIFY_DIS_ACTION_INIT_FAILURE, "Bluetooth LE is not supported in this devices!!");
             return;
         }
 
-
-        mBleDiscoveryCallback.onInitSuccess();
+        notifyDisListeners(NotifyDisAction.NOTIFY_DIS_ACTION_INIT_SUCCESS, null);
     }
 
     /**
@@ -138,7 +257,7 @@ public class BLECentralHelper {
 
         @Override
         public void onBatchScanResults(List<ScanResult> results) {
-            Log.d(TAG, "onBatchScanResults: "+results.size()+" results");
+            Log.d(TAG, "onBatchScanResults: " + results.size() + " results");
             for (ScanResult result : results) {
                 processResult(result);
             }
@@ -146,13 +265,13 @@ public class BLECentralHelper {
 
         @Override
         public void onScanFailed(int errorCode) {
-            Log.w(TAG, "LE Scan Failed: "+errorCode);
+            Log.w(TAG, "LE Scan Failed: " + errorCode);
         }
 
         private void processResult(ScanResult result) {
             BluetoothDevice device = result.getDevice();
             Log.i(TAG, "New LE Device: " + device.getName() + " @ " + result.getRssi());
-            mBleDiscoveryCallback.onScanResult(device, result.getRssi());
+            notifyDisListeners(NotifyDisAction.NOTIFY_DIS_ACTION_SCAN_RESULT, device, result.getRssi());
         }
     };
 
@@ -163,8 +282,7 @@ public class BLECentralHelper {
      * @param device
      * @param events
      */
-    public void connect(Context context, BluetoothDevice device, BLECentralChatEvents events){
-        mBleChatEvents = events;
+    public void connect(Context context, BluetoothDevice device) {
         mConnectedGatt = device.connectGatt(context, false, mGattCallback);
     }
 
@@ -177,10 +295,8 @@ public class BLECentralHelper {
     /**
      * Will try to connect to a RFCOMMSocket previously announced by the Peripheral device
      * WARNING: This is just a test. It may fail...
-     *
-     *
      */
-    private void connect2RfcommSocket(){
+    private void connect2RfcommSocket() {
         IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
         mContext.registerReceiver(mReceiver, filter);
         // Register for broadcasts when discovery has finished
@@ -202,14 +318,14 @@ public class BLECentralHelper {
                     try {
                         mSocket = classicBtDevice.createInsecureRfcommSocketToServiceRecord(MY_UUID_INSECURE);
                         mSocket.connect();
-                        mBleChatEvents.onRfcommConnect();
+                        notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_RFCOMM_CONNECT, null);
                     } catch (IOException e) {
                         try {
                             mSocket.close();
                         } catch (IOException e2) {
-                            mBleChatEvents.onConnectionError(e2.toString());
+                            notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_CONNECTION_ERROR, e2.toString());
                         }
-                        mBleChatEvents.onConnectionError(e.toString());
+                        notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_CONNECTION_ERROR, e.toString());
                     }
                 }
                 // When discovery is finished, change the Activity title
@@ -219,32 +335,32 @@ public class BLECentralHelper {
         }
     };
 
-    public BluetoothGattCallback mGattCallback = new BluetoothGattCallback(){
+    public BluetoothGattCallback mGattCallback = new BluetoothGattCallback() {
         @Override
         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
             super.onConnectionStateChange(gatt, status, newState);
             Log.d(TAG, "onConnectionStateChange "
-                    +BLEChatProfile.getStatusDescription(status)+" "
-                    +BLEChatProfile.getStateDescription(newState));
+                    + BLEChatProfile.getStatusDescription(status) + " "
+                    + BLEChatProfile.getStateDescription(newState));
 
-            if(status == BluetoothGatt.GATT_SUCCESS) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
                     gatt.discoverServices();
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     mHandler.post(new Runnable() {
                         @Override
                         public void run() {
-                            mBleChatEvents.onDisconnect();
+                            notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_DISCONNECT, null);
                         }
                     });
 
                 }
-            }else{
+            } else {
                 final int finalStatus = status;
                 mHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        mBleChatEvents.onConnectionError("Connection state error! : Error = " + finalStatus);
+                        notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_CONNECTION_ERROR, "Connection state error! : Error = " + finalStatus);
                     }
                 });
 
@@ -257,7 +373,7 @@ public class BLECentralHelper {
             Log.d(TAG, "onServicesDiscovered:");
 
             for (BluetoothGattService service : gatt.getServices()) {
-                Log.d(TAG, "Service: "+service.getUuid());
+                Log.d(TAG, "Service: " + service.getUuid());
                 if (BLEChatProfile.SERVICE_UUID.equals(service.getUuid())) {
                     gatt.readCharacteristic(service.getCharacteristic(BLEChatProfile.CHARACTERISTIC_VERSION_UUID));
                     gatt.readCharacteristic(service.getCharacteristic(BLEChatProfile.CHARACTERISTIC_DESC_UUID));
@@ -269,7 +385,7 @@ public class BLECentralHelper {
             mHandler.post(new Runnable() {
                 @Override
                 public void run() {
-                    mBleChatEvents.onConnect();
+                    notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_CONNECT, null);
                 }
             });
         }
@@ -284,7 +400,7 @@ public class BLECentralHelper {
                 mHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        mBleChatEvents.onMessage(msg);
+                        notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_MESSAGE, msg);
                     }
                 });
 
@@ -296,7 +412,7 @@ public class BLECentralHelper {
                 mHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        mBleChatEvents.onVersion(version);
+                        notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_VERSION, version);
                     }
                 });
 
@@ -308,7 +424,7 @@ public class BLECentralHelper {
                 mHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        mBleChatEvents.onDescription(description);
+                        notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_DESCRIPTION, description);
                     }
                 });
 
@@ -318,15 +434,15 @@ public class BLECentralHelper {
         }
 
         @Override
-        public void onCharacteristicWrite (BluetoothGatt gatt,
-                                    BluetoothGattCharacteristic characteristic,
-                                    int status){
-            if (BLEChatProfile.CHARACTERISTIC_BLE_TRANSFER_UUID.equals(characteristic.getUuid())){
+        public void onCharacteristicWrite(BluetoothGatt gatt,
+                                          BluetoothGattCharacteristic characteristic,
+                                          int status) {
+            if (BLEChatProfile.CHARACTERISTIC_BLE_TRANSFER_UUID.equals(characteristic.getUuid())) {
                 final int chatStatus = (status == BluetoothGatt.GATT_SUCCESS ? BLEChatEvents.SENT_SUCCEED : BLEChatEvents.SENT_FAILED);
                 mHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        mBleChatEvents.onStreamSent(chatStatus);
+                        notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_STREAM_SENT, chatStatus);
                     }
                 });
             }
@@ -334,15 +450,15 @@ public class BLECentralHelper {
         }
 
         @Override
-        public void onMtuChanged (BluetoothGatt gatt,
-                           int mtu,
-                           int status){
+        public void onMtuChanged(BluetoothGatt gatt,
+                                 int mtu,
+                                 int status) {
             final int chatStatus = (status == BluetoothGatt.GATT_SUCCESS ? BLECentralChatEvents.MTU_CHANGE_SUCCEED : BLECentralChatEvents.MTU_CHANGE_FAILED);
             mMtu = mtu;
             mHandler.post(new Runnable() {
                 @Override
                 public void run() {
-                    mBleChatEvents.onMtuChanged(chatStatus, mMtu);
+                    notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_MTU_CHANGED, chatStatus, mMtu);
                 }
             });
         }
@@ -357,7 +473,7 @@ public class BLECentralHelper {
                 mHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        mBleChatEvents.onMessage(characteristic.getStringValue(0));
+                        notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_MESSAGE, characteristic.getStringValue(0));
                     }
                 });
             } else if (BLEChatProfile.CHARACTERISTIC_RFCOMM_TRANSFER_UUID.equals(characteristic.getUuid())) {
@@ -373,7 +489,7 @@ public class BLECentralHelper {
                 mHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        mBleChatEvents.onInfo("BLE_TRANS Charac changed!!");
+                        notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_INFO, "BLE_TRANS Charac changed!!");
                     }
                 });
             }
@@ -387,23 +503,23 @@ public class BLECentralHelper {
 
         characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
         characteristic.setValue(data);
-        if(!mConnectedGatt.writeCharacteristic(characteristic)){
-            mBleChatEvents.onConnectionError("Couldn't send data!!");
+        if (!mConnectedGatt.writeCharacteristic(characteristic)) {
+            notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_CONNECTION_ERROR, "Couldn't send data!!");
         }
     }
 
-    public void send(String msg){
+    public void send(String msg) {
         send(msg.getBytes());
     }
 
     /**
      *
      */
-    public void sendFile(final Uri uri){
+    public void sendFile(final Uri uri) {
         mHandler.post(new Runnable() {
             @Override
             public void run() {
-                try{
+                try {
                     InputStream is = mContext.getContentResolver().openInputStream(uri);
                     ByteArrayOutputStream bos = new ByteArrayOutputStream();
                     byte[] b = new byte[1024];
@@ -412,9 +528,9 @@ public class BLECentralHelper {
                         bos.write(b, 0, bytesRead);
                     }
                     send2Rfcomm(bos.toByteArray());
-                }catch(FileNotFoundException ex){
+                } catch (FileNotFoundException ex) {
 
-                }catch(IOException ex){
+                } catch (IOException ex) {
 
                 }
             }
@@ -422,18 +538,17 @@ public class BLECentralHelper {
     }
 
     /**
-     *
      * @param data
      */
-    private synchronized void send2Rfcomm(byte[] data){
+    private synchronized void send2Rfcomm(byte[] data) {
         try {
             OutputStream stream = mSocket.getOutputStream();
             stream.write(data);
-        }catch (IOException e){
+        } catch (IOException e) {
             mHandler.post(new Runnable() {
                 @Override
                 public void run() {
-                    mBleChatEvents.onConnectionError("Error sending message to RFCOMM Socket");
+                    notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_CONNECTION_ERROR, "Error sending message to RFCOMM Socket");
                 }
             });
 
@@ -459,7 +574,7 @@ public class BLECentralHelper {
         while (!mConnectedGatt.writeCharacteristic(characteristic)) {
             try {
                 if (iRetries > MAX_RETRIES) {
-                    mBleChatEvents.onConnectionError("Couldn't send more data!!");
+                    notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_CONNECTION_ERROR, "Couldn't send more data!!");
                     return;
                 }
                 iRetries++;
@@ -467,7 +582,7 @@ public class BLECentralHelper {
                 // We are in StreamThread thread.... so we can sleep
                 Thread.sleep(BLEChatProfile.SEND_INTERVAL);
             } catch (InterruptedException ex) {
-                mBleChatEvents.onConnectionError("Interrupted while sleeping!!");
+                notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_CONNECTION_ERROR, "Interrupted while sleeping!!");
                 return;
             }
         }
@@ -479,20 +594,21 @@ public class BLECentralHelper {
      * will start the new block with the next letter of the alphabet.
      */
     private int mLetterCounter = 97;
-    private byte[] getAlphabetDataBlock(int numElems){
+
+    private byte[] getAlphabetDataBlock(int numElems) {
         String string = "";
 
-        for(int e = 0; e < numElems - 3; e++){
-            string += String.valueOf((char)mLetterCounter);
+        for (int e = 0; e < numElems - 3; e++) {
+            string += String.valueOf((char) mLetterCounter);
             mLetterCounter = (mLetterCounter > 121 ? 97 : mLetterCounter + 1);
         }
-        byte [] data = string.getBytes();
-        byte [] finalData = new byte[data.length + 3];
-        byte [] header = {0,0,0};
+        byte[] data = string.getBytes();
+        byte[] finalData = new byte[data.length + 3];
+        byte[] header = {0, 0, 0};
 
 
         System.arraycopy(data, 0, finalData, 0, data.length);
-        System.arraycopy(header,0, finalData, finalData.length - 3, header.length );
+        System.arraycopy(header, 0, finalData, finalData.length - 3, header.length);
         return finalData;
     }
 
@@ -505,15 +621,16 @@ public class BLECentralHelper {
     /**
      * Changes MTU.
      * This will trigger onMtuChanged() callback
+     *
      * @param size
      */
-    public void changeMtu(int size){
+    public void changeMtu(int size) {
         if (!mConnectedGatt.requestMtu(size)) {
-            Log.d(TAG,"Couldn't set MTU!!");
+            Log.d(TAG, "Couldn't set MTU!!");
             mHandler.post(new Runnable() {
                 @Override
                 public void run() {
-                    mBleChatEvents.onConnectionError("Couldn't set MTU!!");
+                    notifyChatListeners(NotifyChatAction.NOTIFY_CHAT_ACTION_CONNECTION_ERROR, "Couldn't set MTU!!");
                 }
             });
             return;
@@ -525,14 +642,16 @@ public class BLECentralHelper {
     /**
      * Sets the final MTU
      */
-    public void setMtu(int size){
+    public void setMtu(int size) {
         mMtu = size;
-    };
+    }
+
+    ;
 
     /**
      * Gets the final MTU
      */
-    public int getMtu(){
+    public int getMtu() {
         return mMtu;
     }
 
